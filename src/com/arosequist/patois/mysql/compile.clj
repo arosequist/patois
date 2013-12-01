@@ -217,7 +217,13 @@
               :modulus "%"
               :exponentiation "^")
             " ")
-          (map #(compile-expression % opts) (:operands expr)))
+          (map
+            (fn [e]
+              (str
+                (if (= (:type e) :operation) "(")
+                (compile-expression e opts)
+                (if (= (:type e) :operation) ")")))
+            (:operands expr)))
       :in
         (str (compile-expression (:expression expr) opts)
           (if (:not? expr) " NOT")

@@ -70,6 +70,7 @@
     "INTERVAL 30 DAY" {:type :interval, :expression {:type :number, :value 30}, :unit :days}
     "A + 3" {:type :operation, :operation :addition, :operands [{:type :column, :column "A"}, {:type :number, :value 3}]}
     "A - B - C" {:type :operation, :operation :subtraction, :operands [{:type :column, :column "A"}, {:type :column, :column "B"}, {:type :column, :column "C"}]}
+    "(1 + 2) * 3" {:type :operation, :operation :multiplication, :operands [{:type :operation, :operation :addition, :operands [{:type :number, :value 1}, {:type :number, :value 2}]}, {:type :number, :value 3}]}
     "C IN (1, 3, 5)" {:type :in, :expression {:type :column, :column "C"}, :in [{:type :number, :value 1}, {:type :number, :value 3}, {:type :number, :value 5}]}
     "C NOT IN (1, 3, 5)" {:type :in, :not? true, :expression {:type :column, :column "C"}, :in [{:type :number, :value 1}, {:type :number, :value 3}, {:type :number, :value 5}]}
     "C BETWEEN 1 AND 5" {:type :between, :expression {:type :column, :column "C"}, :between [{:type :number, :value 1}, {:type :number, :value 5}]}
