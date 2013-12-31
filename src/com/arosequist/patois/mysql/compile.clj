@@ -10,7 +10,7 @@
   (if s
     (contains? reserved-words (.toUpperCase (.trim s)))))
 
-(declare compile-statement)
+(declare compile-select-statement)
 
 (defn compile-expression
   ([expr]
@@ -124,12 +124,12 @@
         (str
           (if (:not? expr) "NOT ")
           "EXISTS ("
-          (compile-statement (:subquery expr) opts)
+          (compile-select-statement (:subquery expr) opts)
           ")")
       :subquery
         (str
           "("
-          (compile-statement (:subquery expr) opts)
+          (compile-select-statement (:subquery expr) opts)
           ")")
       :match
         (let [{:keys [columns against search-modifier]} expr]
@@ -273,56 +273,59 @@
         (str "NOT " (compile-expression (:expression expr) opts))
       (throw (RuntimeException. (str "Unknown expression type: " (:type expr)))))))
 
-(defn compile-statement
-  ([smt] (compile-statement smt nil))
-  ([smt {:keys [validate? quote-identifiers?] :or {validate? true, quote-identifiers? :when-needed} :as opts}]
-    (if validate?
-      (validate schema/Statement smt))
-    (case (:type smt)
-      :select
-        (let [{:keys [projections options from where group-by group-with-rollup? having order-by limit offset]} smt]
-          (str
-            "SELECT"
-            (if (contains? options :distinct) " DISTINCT")
-            (if (contains? options :high-priority) " HIGH_PRIORITY")
-            (if (contains? options :straight-join) " STRAIGHT_JOIN")
-            (if (contains? options :sql-small-result) " SQL_SMALL_RESULT")
-            (if (contains? options :sql-big-result) " SQL_BIG_RESULT")
-            (if (contains? options :sql-buffer-result) " SQL_BUFFER_RESULT")
-            (if (contains? options :sql-cache) " SQL_CACHE")
-            (if (contains? options :sql-no-cache) " SQL_NO_CACHE")
-            (if (contains? options :sql-calc-found-rows) " SQL_CALC_FOUND_ROWS")
-            (if (= projections :*)
-              " *"
-              (str
-                " "
-                (str/join ", " (map
-                                 (fn [{:keys [expression star alias]}]
-                                   (str
-                                     (if expression (compile-expression expression opts))
-                                     (if star
-                                       (str
-                                         (if (:schema star) (str (:schema star) "."))
-                                         (:table star)
-                                         ".*"))
-                                     (if alias (str " AS " alias))))
-                                 projections))))
-            (if from
-              (str
-                " FROM"
-                (apply str
-                  (map-indexed
-                    (fn [idx {:keys [schema table subquery natural-join? join-type on using partitions alias index-hints]}]
-                      (str
-                        (if (and (not (zero? idx)) (= join-type :inner) (nil? on)) ",")
-                        (if natural-join? " NATURAL")
-                        (if (and join-type on) (str " " ({:inner "JOIN", :straight "STRAIGHT JOIN", :left-outer "LEFT OUTER", :right-outer "RIGHT OUTER"} join-type)))
-                        (if schema (str " " schema "." table) (str " " table))
-                        (if alias (str " AS " alias))
-                        (if index-hints
-                          (str
-                            " "
-                            (str/join ", " (map
+(defn compile-order-by-clause
+  [clause opts]
+  (str " ORDER BY " (str/join ", " (map (fn [{:keys [expression asc-desc]}]
+                                          (str
+                                            (compile-expression expression opts)
+                                            (if (= asc-desc :asc) " ASC")
+                                            (if (= asc-desc :desc) " DESC"))) clause))))
+
+(defn compile-select-clause
+  [clause opts]
+  (let [{:keys [projections options from where group-by group-with-rollup? having order-by limit offset]} clause]
+    (str
+      "SELECT"
+      (if (contains? options :distinct) " DISTINCT")
+      (if (contains? options :high-priority) " HIGH_PRIORITY")
+      (if (contains? options :straight-join) " STRAIGHT_JOIN")
+      (if (contains? options :sql-small-result) " SQL_SMALL_RESULT")
+      (if (contains? options :sql-big-result) " SQL_BIG_RESULT")
+      (if (contains? options :sql-buffer-result) " SQL_BUFFER_RESULT")
+      (if (contains? options :sql-cache) " SQL_CACHE")
+      (if (contains? options :sql-no-cache) " SQL_NO_CACHE")
+      (if (contains? options :sql-calc-found-rows) " SQL_CALC_FOUND_ROWS")
+      (if (= projections :*)
+        " *"
+        (str
+          " "
+          (str/join ", " (map
+                           (fn [{:keys [expression star alias]}]
+                             (str
+                               (if expression (compile-expression expression opts))
+                               (if star
+                                 (str
+                                   (if (:schema star) (str (:schema star) "."))
+                                   (:table star)
+                                   ".*"))
+                               (if alias (str " AS " alias))))
+                           projections))))
+      (if from
+        (str
+          " FROM"
+          (apply str
+                 (map-indexed
+                   (fn [idx {:keys [schema table subquery natural-join? join-type on using partitions alias index-hints]}]
+                     (str
+                       (if (and (not (zero? idx)) (= join-type :inner) (nil? on)) ",")
+                       (if natural-join? " NATURAL")
+                       (if (and join-type on) (str " " ({:inner "JOIN", :straight "STRAIGHT JOIN", :left-outer "LEFT OUTER", :right-outer "RIGHT OUTER"} join-type)))
+                       (if schema (str " " schema "." table) (str " " table))
+                       (if alias (str " AS " alias))
+                       (if index-hints
+                         (str
+                           " "
+                           (str/join ", " (map
                                             (fn [{:keys [action index-key indexes for]}]
                                               (str
                                                 (case action
@@ -338,23 +341,49 @@
                                                 (str/join ", " indexes)
                                                 ")"))
                                             index-hints))))
-                        (if on (str " ON " (compile-expression on opts)))
-                        (if using (str " USING (" (str/join ", " using) ")"))))
-                    from))))
-            (if where (str " WHERE " (compile-expression where opts)))
-            (if group-by (str " GROUP BY " (str/join ", " (map #(compile-expression % opts) group-by))))
-            (if group-with-rollup? (str " WITH ROLLUP"))
-            (if having (str " HAVING " (compile-expression having opts)))
-            (if order-by (str " ORDER BY " (str/join ", " (map (fn [{:keys [expression asc-desc]}]
-                                                                 (str
-                                                                   (compile-expression expression opts)
-                                                                   (if (= asc-desc :asc) " ASC")
-                                                                   (if (= asc-desc :desc) " DESC"))) order-by))))
-            (if limit (str " LIMIT " limit))
-            (if offset (str " OFFSET " offset))
-            (if (contains? options :for-update) " FOR UPDATE")
-            (if (contains? options :lock-in-shared-mode) " LOCK IN SHARED MODE")))
-      :union
-        (str/join
-          (if (:all? smt) " UNION ALL " " UNION ")
-          (map #(compile-statement % opts) (:selects smt))))))
+                       (if on (str " ON " (compile-expression on opts)))
+                       (if using (str " USING (" (str/join ", " using) ")"))))
+                   from))))
+      (if where (str " WHERE " (compile-expression where opts)))
+      (if group-by (str " GROUP BY " (str/join ", " (map #(compile-expression % opts) group-by))))
+      (if group-with-rollup? (str " WITH ROLLUP"))
+      (if having (str " HAVING " (compile-expression having opts)))
+      (if order-by (compile-order-by-clause order-by opts))
+      (if limit (str " LIMIT " limit))
+      (if offset (str " OFFSET " offset)))))
+
+(defn- contains-any?
+  [coll keys]
+  (some #(contains? coll %) keys))
+
+(defn- selects-need-wrapped?
+  [smt]
+  (and
+    (> (count (:selects smt)) 1)
+    (some #(contains-any? (:select %) [:order-by :limit :offset]) (:selects smt))))
+
+(defn compile-select-statement
+  ([smt] (compile-select-statement smt nil))
+  ([smt {:keys [validate? wrap-selects-in-parens] :or {validate? true, wrap-selects-in-parens :when-needed} :as opts}]
+    (if validate?
+      (validate schema/SelectStatement smt))
+    (let [wrap-selects-in-parens? (case wrap-selects-in-parens
+                                    :when-needed (selects-need-wrapped? smt)
+                                    :always true)
+          {:keys [selects options order-by limit offset]} smt]
+      (str
+        (str/join " " (map-indexed (fn [idx itm]
+                                     (str
+                                       (if-not (zero? idx)
+                                         (if (:union-all? itm)
+                                           "UNION ALL "
+                                           "UNION "))
+                                       (if wrap-selects-in-parens? "(")
+                                       (compile-select-clause (:select itm) opts)
+                                       (if wrap-selects-in-parens? ")")))
+                                   selects))
+        (if order-by (compile-order-by-clause order-by opts))
+        (if limit (str " LIMIT " smt))
+        (if offset (str " OFFSET " smt))
+        (if (contains? options :for-update) " FOR UPDATE")
+        (if (contains? options :lock-in-shared-mode) " LOCK IN SHARED MODE")))))

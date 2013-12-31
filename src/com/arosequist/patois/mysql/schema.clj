@@ -1,7 +1,7 @@
 (ns com.arosequist.patois.mysql.schema
   (:require [schema.core :refer [enum either eq optional-key recursive Number Int Keyword String]]))
 
-(declare Statement)
+(declare SelectStatement)
 
 (def Expression
   (either
@@ -62,10 +62,10 @@
     {:type (eq :negation)
      :expression (recursive #'Expression)}
     {:type (eq :exists)
-     :subquery (recursive #'Statement)
+     :subquery (recursive #'SelectStatement)
      (optional-key :not?) Boolean}
     {:type (eq :subquery)
-     :subquery (recursive #'Statement)}
+     :subquery (recursive #'SelectStatement)}
     {:type (eq :match)
      :columns [(recursive #'Expression)]
      :against (recursive #'Expression)
@@ -112,14 +112,17 @@
     {:type (eq :not)
      :expression (recursive #'Expression)}))
 
-(def SelectStatement
-  {:type (eq :select)
-   :projections (either (eq :*)
+(def OrderByClause
+  [{:expression Expression
+    (optional-key :asc-desc) (enum :asc :desc)}])
+
+(def SelectClause
+  {:projections (either (eq :*)
                         [{(optional-key :expression) Expression
                           (optional-key :star) {:table String
                                                 (optional-key :schema) String}
                           (optional-key :alias) String}])
-   (optional-key :options) #{(enum :distinct :high-priority :straight-join :sql-small-result :sql-big-result :sql-buffer-result :sql-cache :sql-no-cache :sql-calc-found-rows :for-update :lock-in-shared-mode)}
+   (optional-key :options) #{(enum :distinct :high-priority :straight-join :sql-small-result :sql-big-result :sql-buffer-result :sql-cache :sql-no-cache :sql-calc-found-rows)}
    (optional-key :from) [{(optional-key :schema) String
                           (optional-key :table) String
                           (optional-key :subquery) SelectStatement
@@ -137,17 +140,14 @@
    (optional-key :group-by) [Expression]
    (optional-key :group-with-rollup?) Boolean
    (optional-key :having) Expression
-   (optional-key :order-by) [{:expression Expression
-                              (optional-key :asc-desc) (enum :asc :desc)}]
+   (optional-key :order-by) OrderByClause
    (optional-key :limit) Int
    (optional-key :offset) Int})
 
-(def UnionStatement
-  {:type (eq :union)
-   :selects [SelectStatement]
-   (optional-key :all?) Boolean})
-
-(def Statement
-  (either
-    SelectStatement
-    UnionStatement))
+(def SelectStatement
+  {:selects [{:select SelectClause
+              (optional-key :union-all?) Boolean}]
+   (optional-key :order-by) OrderByClause
+   (optional-key :limit) Int
+   (optional-key :offset) Int
+   (optional-key :options) #{(enum :for-update :lock-in-shared-mode)}})

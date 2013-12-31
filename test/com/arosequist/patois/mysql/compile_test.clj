@@ -1,5 +1,5 @@
 (ns com.arosequist.patois.mysql.compile-test
-  (:require [com.arosequist.patois.mysql.compile :refer [compile-expression compile-statement]]
+  (:require [com.arosequist.patois.mysql.compile :refer [compile-expression compile-select-statement]]
             [clojure.test :refer [are deftest is]]))
 
 (deftest literals
@@ -57,9 +57,9 @@
 (deftest misc
   (are [r e] (= r (compile-expression e))
     "-C" {:type :negation, :expression {:type :column, :column "C"}}
-    "EXISTS (SELECT 1)" {:type :exists, :subquery {:type :select, :projections [{:expression {:type :number, :value 1}}]}}
-    "NOT EXISTS (SELECT 1)" {:type :exists, :not? true, :subquery {:type :select, :projections [{:expression {:type :number, :value 1}}]}}
-    "(SELECT 1)" {:type :subquery, :subquery {:type :select, :projections [{:expression {:type :number, :value 1}}]}}
+    "EXISTS (SELECT 1)" {:type :exists, :subquery {:selects [{:select {:projections [{:expression {:type :number, :value 1}}]}}]}}
+    "NOT EXISTS (SELECT 1)" {:type :exists, :not? true, :subquery {:selects [{:select {:projections [{:expression {:type :number, :value 1}}]}}]}}
+    "(SELECT 1)" {:type :subquery, :subquery {:selects [{:select {:projections [{:expression {:type :number, :value 1}}]}}]}}
     "MATCH (A, B) AGAINST ('test')" {:type :match, :columns [{:type :column, :column "A"}, {:type :column, :column "B"}], :against {:type :string, :value "test"}}
     "MATCH (A) AGAINST ('test') IN NATURAL LANGUAGE MODE" {:type :match, :columns [{:type :column, :column "A"}], :against {:type :string, :value "test"}, :search-modifier :in-natural-language-mode}
     "MATCH (A) AGAINST ('test') IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION" {:type :match, :columns [{:type :column, :column "A"}], :against {:type :string, :value "test"}, :search-modifier :in-natural-language-mode-with-query-expansion}
@@ -89,19 +89,16 @@
     "C = 1 XOR D <> 5" {:type :logical, :operation :xor, :expressions [{:type :comparison, :operator :equals, :expressions [{:type :column, :column "C"}, {:type :number, :value 1}]}, {:type :comparison, :operator :not-equals, :expressions [{:type :column, :column "D"}, {:type :number, :value 5}]}]}
     "NOT C > 1" {:type :not, :expression {:type :comparison, :operator :greater-than, :expressions [{:type :column, :column "C"}, {:type :number, :value 1}]}}))
 
-(deftest select-statements
-  (are [r s] (= r (compile-statement s))
+(deftest basic-select-statements
+  (are [r s] (= r (compile-select-statement {:selects [{:select s}]}))
     "SELECT * FROM A"
-      {:type :select
-       :projections :*
+      {:projections :*
        :from [{:table "A"}]}
     "SELECT C.* FROM A.B AS C"
-      {:type :select
-       :projections [{:star {:table "C"}}]
+      {:projections [{:star {:table "C"}}]
        :from [{:schema "A", :table "B", :alias "C"}]}
     "SELECT t.name, AVG(g.score) AS avg_score FROM team AS t, game AS g WHERE t.id = g.team GROUP BY t.name WITH ROLLUP ORDER BY t.name"
-      {:type :select
-       :projections [{:expression {:type :column, :table "t", :column "name"}}
+      {:projections [{:expression {:type :column, :table "t", :column "name"}}
                      {:expression {:type :function-call, :name "AVG", :params [{:type :column, :table "g", :column "score"}]}, :alias "avg_score"}]
        :from [{:table "team", :alias "t"}
               {:table "game", :alias "g", :join-type :inner}]
@@ -111,33 +108,46 @@
        :group-with-rollup? true
        :order-by [{:expression {:type :column, :table "t", :column "name"}}]}
     "SELECT HIGH_PRIORITY * FROM atable IGNORE INDEX (idx001) WHERE acol = @avar"
-      {:type :select
-       :options #{:high-priority}
+      {:options #{:high-priority}
        :projections :*
        :from [{:table "atable", :index-hints [{:action :ignore, :index-key :index, :indexes ["idx001"]}]}]
        :where {:type :comparison, :operator :equals, :expressions [{:type :column, :column "acol"}
                                                                    {:type :variable, :name "avar"}]}}
     "SELECT CONVERT('abc' USING utf8)"
-      {:type :select
-       :projections [{:expression {:type :convert, :expression {:type :string, :value "abc"}, :transcoding-name "utf8"}}]}
+      {:projections [{:expression {:type :convert, :expression {:type :string, :value "abc"}, :transcoding-name "utf8"}}]}
     "SELECT * FROM atable LIMIT 10 OFFSET 100"
-      {:type :select
-       :projections :*
+      {:projections :*
        :from [{:table "atable"}]
        :limit 10
        :offset 100}))
 
-(deftest union-statements
-  (are [r s] (= r (compile-statement s))
+(deftest select-statements-with-unions
+  (are [r s] (= r (compile-select-statement s))
     "SELECT 1 UNION SELECT 2"
-      {:type :union
-       :selects [{:type :select, :projections [{:expression {:type :number, :value 1}}]}
-                 {:type :select, :projections [{:expression {:type :number, :value 2}}]}]}
+      {:selects [{:select {:projections [{:expression {:type :number, :value 1}}]}}
+                 {:select {:projections [{:expression {:type :number, :value 2}}]}}]}
     "SELECT 1 UNION ALL SELECT 2"
-      {:type :union
-       :all? true
-       :selects [{:type :select, :projections [{:expression {:type :number, :value 1}}]}
-                 {:type :select, :projections [{:expression {:type :number, :value 2}}]}]}))
+      {:selects [{:select {:projections [{:expression {:type :number, :value 1}}]}}
+                 {:select {:projections [{:expression {:type :number, :value 2}}]}
+                  :union-all? true}]}
+    "SELECT 1 UNION SELECT 2 UNION ALL SELECT 3"
+      {:selects [{:select {:projections [{:expression {:type :number, :value 1}}]}}
+                 {:select {:projections [{:expression {:type :number, :value 2}}]}
+                  :union-all? false}
+                 {:select {:projections [{:expression {:type :number, :value 3}}]}
+                  :union-all? true}]}
+    "(SELECT A FROM T1 WHERE B = 10 ORDER BY A LIMIT 10) UNION (SELECT A FROM T2 WHERE B = 10 ORDER BY A LIMIT 10) ORDER BY A"
+      {:selects [{:select {:projections [{:expression {:type :column, :column "A"}}]
+                           :from [{:table "T1"}]
+                           :where {:type :comparison, :operator :equals, :expressions [{:type :column, :column "B"}, {:type :number, :value 10}]}
+                           :order-by [{:expression {:type :column, :column "A"}}]
+                           :limit 10}}
+                 {:select {:projections [{:expression {:type :column, :column "A"}}]
+                           :from [{:table "T2"}]
+                           :where {:type :comparison, :operator :equals, :expressions [{:type :column, :column "B"}, {:type :number, :value 10}]}
+                           :order-by [{:expression {:type :column, :column "A"}}]
+                           :limit 10}}]
+       :order-by [{:expression {:type :column, :column "A"}}]}))
 
 (deftest validations
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Value does not match schema.*" (compile-expression {:type :invalid})))
