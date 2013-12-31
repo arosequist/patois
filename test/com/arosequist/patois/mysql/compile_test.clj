@@ -28,7 +28,7 @@
     "B.C" {:type :column, :table "B", :column "C"}
     "A.B.C" {:type :column, :schema "A", :table "B", :column "C"}
     "`PURGE`.`KILL`.`TERMINATED`" {:type :column, :schema "PURGE", :table "KILL", :column "TERMINATED"})
-  (is "`A`.`B`.`C`" (compile-expression {:type :column, :schema "A", :table "B", :column "C"} {:quote-identifiers? :always})))
+  (is "`A`.`B`.`C`" (compile-expression {:type :column, :schema "A", :table "B", :column "C"} {:quote-identifiers :always})))
 
 (deftest function-calls
   (are [r e] (= r (compile-expression e))

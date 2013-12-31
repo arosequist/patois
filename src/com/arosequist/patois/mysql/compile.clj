@@ -15,7 +15,7 @@
 (defn compile-expression
   ([expr]
     (compile-expression expr nil))
-  ([expr {:keys [validate? quote-identifiers?] :or {validate? true, quote-identifiers? :when-needed} :as opts}]
+  ([expr {:keys [validate? quote-identifiers] :or {validate? true, quote-identifiers :when-needed} :as opts}]
     (if validate?
       (validate schema/Expression expr))
     (case (:type expr)
@@ -60,7 +60,7 @@
         "NULL"
       :column
         (let [{:keys [schema table column]} expr
-              quote-id #(if (or (= quote-identifiers? :always)
+              quote-id #(if (or (= quote-identifiers :always)
                                 (reserved-word? %))
                           (str "`" % "`")
                           %)]
